@@ -8,6 +8,7 @@
     "should": "~0.5.1",
     "jsftp": "*"
   },
+  "main": "ftpd.js",
   "scripts": { 
     "test" : "mocha specs/* --globals commandArg" 
   } 
