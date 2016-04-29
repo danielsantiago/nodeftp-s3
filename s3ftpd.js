@@ -203,10 +203,10 @@ function createServer(host, s3Bucket) {
                         var failure = function() {
                             dataSocket.end();
                         };
-                        var path = PathModule.join(socket.s3Bucket, socket.fs.cwd());
+                        var params = {Bucket: socket.s3Bucket};
                         if (dataSocket.readable) dataSocket.resume();
                         logIf(3, "Sending file list", socket);
-                        fs.readdir(path, function(err, files) {
+                        AWS.s3.listObjects(params, function(err, files) {
                             if (err) {
                                 logIf(0, "While sending file list, reading directory: " + err, socket);
                                 dataSocket.write("", failure);
