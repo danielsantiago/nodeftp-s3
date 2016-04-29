@@ -206,7 +206,8 @@ function createServer(host, s3Bucket) {
                         var params = {Bucket: socket.s3Bucket};
                         if (dataSocket.readable) dataSocket.resume();
                         logIf(3, "Sending file list", socket);
-                        AWS.s3.listObjects(params, function(err, files) {
+                        var s3 = new AWS.S3 ({params}); 
+                        s3.listObjects(params, function(err, files) {
                             if (err) {
                                 logIf(0, "While sending file list, reading directory: " + err, socket);
                                 dataSocket.write("", failure);
