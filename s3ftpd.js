@@ -4,6 +4,7 @@ var fs = require("fs");
 var dummyfs = require("./dummyfs");
 var PathModule = require("path");
 var glob = require('./glob');
+var AWS = require('aws-sdk');
 require('./date-format');
 
 /*
@@ -17,11 +18,11 @@ TODO:
 */
 
 
-// host should be an IP address, and sandbox a path without trailing slash for now
-function createServer(host, sandbox) {
+// host should be an IP address, and s3Bucket a path without trailing slash for now
+function createServer(host, s3Bucket) {
     // make sure host is an IP address, otherwise DATA connections will likely break
     var server = net.createServer();
-    server.baseSandbox = sandbox; // path which we're starting relative to
+    server.baseS3Bucket = s3Bucket; // path which we're starting relative to
     server.debugging = 0;
 
     var logIf = function(level, message, socket) {
@@ -34,7 +35,7 @@ function createServer(host, sandbox) {
     };
 
     server.on("listening", function() {
-        logIf(0, "nodeFTPd server up and ready for connections");
+        logIf(0, "nodeS3FTPd server up and ready for connections");
     });
     server.on("connection", function(socket) {
         server.emit("client:connected", socket); // pass socket so they can listen for client-specific events
@@ -54,7 +55,7 @@ function createServer(host, sandbox) {
         socket.authFailures = 0; // 3 tries then we disconnect you
         socket.username = null;
 
-        socket.sandbox = sandbox; // after authentication we'll tack on a user-specific subfolder
+        socket.s3Bucket = s3Bucket; // after authentication we'll tack on a user-specific subfolder
         socket.fs = new dummyfs.dummyfs("/");
         logIf(0, "Base FTP directory: "+socket.fs.cwd());
 
@@ -154,7 +155,7 @@ function createServer(host, sandbox) {
                 case "CWD":
                     // Change working directory.
                     if (!authenticated()) break;
-                    var path = PathModule.join(socket.sandbox, PathModule.resolve(socket.fs.cwd(), commandArg));
+                    var path = PathModule.join(socket.s3Bucket, PathModule.resolve(socket.fs.cwd(), commandArg));
                     fs.exists(path, function(exists) {
                         if (!exists) {
                             socket.write("550 Folder not found.\r\n");
@@ -167,7 +168,7 @@ function createServer(host, sandbox) {
                     // Delete file.
                     if (!authenticated()) break;
                     var filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                    fs.unlink( PathModule.join(socket.sandbox, filename), function(err){
+                    fs.unlink( PathModule.join(socket.s3Bucket, filename), function(err){
                         if (err) {
                             logIf(0, "Error deleting file: "+filename+", "+err, socket);
                             // write error to socket
@@ -202,7 +203,7 @@ function createServer(host, sandbox) {
                         var failure = function() {
                             dataSocket.end();
                         };
-                        var path = PathModule.join(socket.sandbox, socket.fs.cwd());
+                        var path = PathModule.join(socket.s3Bucket, socket.fs.cwd());
                         if (dataSocket.readable) dataSocket.resume();
                         logIf(3, "Sending file list", socket);
                         fs.readdir(path, function(err, files) {
@@ -246,7 +247,7 @@ function createServer(host, sandbox) {
                     // Make directory.
                     if (!authenticated()) break;
                     var filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                    fs.mkdir( PathModule.join(socket.sandbox, filename), 0755, function(err){
+                    fs.mkdir( PathModule.join(socket.s3Bucket, filename), 0755, function(err){
                         if(err) {
                             logIf(0, "Error making directory " + filename + " because " + err, socket);
                             // write error to socket
@@ -286,16 +287,16 @@ function createServer(host, sandbox) {
                             // Remove double slashes or "up directory"
                             commandArg = commandArg.replace(/\/{2,}|\.{2}/g, '');
                             if (commandArg.substr(0, 1) == '/') {
-                                temp = PathModule.join(socket.sandbox, commandArg);
+                                temp = PathModule.join(socket.s3Bucket, commandArg);
                             } else {
-                                temp = PathModule.join(socket.sandbox, socket.fs.cwd(), commandArg);
+                                temp = PathModule.join(socket.s3Bucket, socket.fs.cwd(), commandArg);
                             }
-                        } else temp = PathModule.join(socket.sandbox, socket.fs.cwd());
+                        } else temp = PathModule.join(socket.s3Bucket, socket.fs.cwd());
                         if (dataSocket.readable) dataSocket.resume();
                         logIf(3, "Sending file list", socket);
                     
                         glob.glob(temp, function(err, files) {
-                        //fs.readdir(socket.sandbox + temp.cwd(), function(err, files) {
+                        //fs.readdir(socket.s3Bucket + temp.cwd(), function(err, files) {
                             if (err) {
                                 logIf(0, "During NLST, error globbing files: " + err, socket);
                                 socket.write("451 Read error\r\n");
@@ -319,7 +320,7 @@ function createServer(host, sandbox) {
                         function(username) { // implementor should call this on successful password check
                             socket.write("230 Logged on\r\n");
                             socket.username = username;
-                            socket.sandbox = PathModule.join(server.baseSandbox, username);
+                            socket.s3Bucket = PathModule.join(server.baseS3Bucket, username);
                         },
                         function() { // call second callback if password incorrect
                             socket.write("530 Invalid password\r\n");
@@ -423,7 +424,7 @@ function createServer(host, sandbox) {
                         dataSocket.setEncoding(socket.mode);
 
                         var filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                        var from = fs.createReadStream( PathModule.join(socket.sandbox, filename), {flags:"r"});
+                        var from = fs.createReadStream( PathModule.join(socket.s3Bucket, filename), {flags:"r"});
                         from.on("error", function () {
                             logIf(2, "Error reading file");
                         });
@@ -446,7 +447,7 @@ function createServer(host, sandbox) {
                     // Remove a directory.
                     if (!authenticated()) break;
                     var filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                    fs.rmdir( PathModule.join(socket.sandbox, filename), function(err){
+                    fs.rmdir( PathModule.join(socket.s3Bucket, filename), function(err){
                         if(err) {
                             logIf(0, "Error removing directory "+filename, socket);
                             socket.write("550 Delete operation failed\r\n");
@@ -459,7 +460,7 @@ function createServer(host, sandbox) {
                     if (!authenticated()) break;
                     socket.filefrom = PathModule.resolve(socket.fs.cwd(), commandArg);
                     logIf(3, "Rename from " + socket.filefrom, socket);
-                    fs.exists( PathModule.join(socket.sandbox, socket.filefrom), function(exists) {
+                    fs.exists( PathModule.join(socket.s3Bucket, socket.filefrom), function(exists) {
                         if (exists) socket.write("350 File exists, ready for destination name\r\n");
                         else socket.write("350 Command failed, file does not exist\r\n");
                     });
@@ -468,7 +469,7 @@ function createServer(host, sandbox) {
                     // Rename to.
                     if (!authenticated()) break;
                     var fileto = PathModule.resolve(socket.fs.cwd(), commandArg);
-                    fs.rename( PathModule.join(socket.sandbox, socket.filefrom), PathModule.join(socket.sandbox, fileto), function(err){
+                    fs.rename( PathModule.join(socket.s3Bucket, socket.filefrom), PathModule.join(socket.s3Bucket, fileto), function(err){
                         if(err) {
                             logIf(3, "Error renaming file from "+socket.filefrom+" to "+fileto, socket);
                             socket.write("550 Rename failed\r\n");
@@ -480,7 +481,7 @@ function createServer(host, sandbox) {
                     // Return the size of a file. (RFC 3659)
                     if (!authenticated()) break;
                     var filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                    fs.stat( PathModule.join(socket.sandbox, filename), function (err, s) {
+                    fs.stat( PathModule.join(socket.s3Bucket, filename), function (err, s) {
                         if(err) {
                             logIf(0, "Error getting size of file: "+filename, socket);
                             socket.write("450 Failed to get size of file\r\n");
@@ -496,7 +497,7 @@ function createServer(host, sandbox) {
                     whenDataWritable( function(dataSocket) {
                         // dataSocket comes to us paused, so we have a chance to create the file before accepting data
                         filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                        var destination = fs.createWriteStream( PathModule.join(socket.sandbox, filename), {flags: 'w+', mode:0644});
+                        var destination = fs.createWriteStream( PathModule.join(socket.s3Bucket, filename), {flags: 'w+', mode:0644});
                         destination.on("error", function(err) {
                             logIf(0, 'Error opening/creating file: ' + filename, socket);
                             socket.write("553 Could not create file\r\n");
@@ -525,7 +526,7 @@ function createServer(host, sandbox) {
                     break;
                 case "SYST":
                     // Return system type.
-                    socket.write("215 UNIX emulated by NodeFTPd\r\n");
+                    socket.write("215 UNIX emulated by NodeS3FTPd\r\n");
                     break;
                 case "TYPE":
                     // Sets the transfer mode (ASCII/Binary).
@@ -657,10 +658,10 @@ function createServer(host, sandbox) {
 
         // Tell client we're ready
         logIf(1, "Connection", socket);
-        //socket.send("220 NodeFTPd Server version 0.0.10\r\n");
+        //socket.send("220 NodeS3FTPd Server version 0.0.10\r\n");
         //socket.write("220 written by Andrew Johnston (apjohnsto@gmail.com)\r\n");
-        //socket.write("220 Please visit http://github.com/billywhizz/NodeFTPd\r\n");
-        socket.write("220 FTP server (nodeftpd) ready\r\n");
+        //socket.write("220 Please visit http://github.com/billywhizz/NodeS3FTPd\r\n");
+        socket.write("220 FTP server (nodes3ftpd) ready\r\n");
     });
 
     server.addListener("close", function() {
