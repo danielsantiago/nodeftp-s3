@@ -204,6 +204,7 @@ function createServer(host, s3Bucket) {
                             dataSocket.end();
                         };
                         var params = {Bucket: socket.s3Bucket};
+                        console.log("Bucket connection is " + socket.s3Bucket);
                         if (dataSocket.readable) dataSocket.resume();
                         logIf(3, "Sending file list", socket);
                         var s3 = new AWS.S3 ({params}); 
@@ -215,8 +216,10 @@ function createServer(host, s3Bucket) {
                                 // Wait until acknowledged!
                                 socket.write("150 Here comes the directory listing\r\n", function() {
                                     logIf(3, "Directory has " + files.length + " files", socket);
+                                    console.log("output from S3..." + util.inspect(files, false, null));
                                     for (var i = 0; i < files.length; i++) {
-                                        var file = files[ i ];
+                                        console.log("File..." + files.Contents[ i ].Key);
+                                        var file = files.Contents[ i ].Key;
                                         var s = fs.statSync( PathModule.join(path, file) );
                                         var line = s.isDirectory() ? 'd' : '-';
                                         if (i > 0) dataSocket.write("\r\n");
@@ -321,7 +324,7 @@ function createServer(host, s3Bucket) {
                         function(username) { // implementor should call this on successful password check
                             socket.write("230 Logged on\r\n");
                             socket.username = username;
-                            socket.s3Bucket = PathModule.join(server.baseS3Bucket, username);
+                            socket.s3Bucket = PathModule.join(server.baseS3Bucket);
                         },
                         function() { // call second callback if password incorrect
                             socket.write("530 Invalid password\r\n");
@@ -498,13 +501,20 @@ function createServer(host, s3Bucket) {
                     whenDataWritable( function(dataSocket) {
                         // dataSocket comes to us paused, so we have a chance to create the file before accepting data
                         filename = PathModule.resolve(socket.fs.cwd(), commandArg);
-                        var destination = fs.createWriteStream( PathModule.join(socket.s3Bucket, filename), {flags: 'w+', mode:0644});
-                        destination.on("error", function(err) {
+                        console.log("filename " + filename + "commandArg " + commandArg);
+                        var body = fs.createWriteStream(commandArg)//, {flags: 'w+', mode:0644});
+                        var params = {Bucket: socket.s3Bucket, Key: commandArg};
+                        var destination = new AWS.S3 (params);
+                        s3upload = destination.upload({Body: body});
+                        //.on('httpUploadProgress', function(evt) { console.log(evt); }).send(function(err, data) {
+                        //    console.log(err, data);
+                        //});
+                        s3upload.on("error", function(err) {
                             logIf(0, 'Error opening/creating file: ' + filename, socket);
                             socket.write("553 Could not create file\r\n");
                             dataSocket.end();
                         });
-                        destination.on("close", function() {
+                        s3upload.on("close", function() {
                             // Finished
                         });
                     
@@ -521,7 +531,7 @@ function createServer(host, s3Bucket) {
                         if (dataSocket.readable) {
                             dataSocket.resume();
                             // Let pipe() do the dirty work ... it'll keep both streams in sync
-                            dataSocket.pipe(destination);
+                            dataSocket.pipe(s3upload);
                         }
                     });
                     break;
